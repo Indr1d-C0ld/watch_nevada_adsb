@@ -16,6 +16,14 @@ Il programma è un sistema di monitoraggio aereo avanzato, progettato per osserv
 
 - Funzionamento continuo: pensato per Raspberry Pi, gira come servizio di sistema systemd, con avvio automatico al boot e riavvio in caso di crash.
 
+### Utilizzo ###
+
+usare --polygons-file <file> per caricare poligoni di coordinate tramite JSON.
+
+Nota: se non passi --polygons-file lo script userà poligoni di esempio (approssimativi, sulla zona di default).
+
+usare --notify-telegram per abilitare le notifiche Telegram, dopo aver modificato lo script inserendo ID del bot e della chat.
+
 
 
 ### Description ###
@@ -35,3 +43,11 @@ The program is an advanced aircraft monitoring system, designed to monitor ADS-B
 - Optional notifications: Ability to send immediate alerts via Telegram to ensure remote monitoring.
 
 - Continuous operation: Designed for Raspberry Pi, it runs as a systemd system service, starting automatically at boot and restarting in the event of a crash.
+
+### Usage ###
+
+Use --polygons-file <file> to load coordinate polygons via JSON.
+
+Note: If you don't specify --polygons-file, the script will use sample polygons (approximate, based on the default area).
+
+Use --notify-telegram to enable Telegram notifications, after editing the script with bot and chat IDs.

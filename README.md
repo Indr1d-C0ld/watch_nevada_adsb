@@ -24,7 +24,7 @@ Nota: se non passi --polygons-file lo script userà poligoni di esempio (appross
 
 usare --notify-telegram per abilitare le notifiche Telegram, dopo aver modificato lo script inserendo ID del bot e della chat.
 
-
+---
 
 ### Description ###
 

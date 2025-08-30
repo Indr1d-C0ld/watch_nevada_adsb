@@ -8,6 +8,8 @@ Aggiunge:
  - use --polygons-file <file> per caricare poligoni ufficiali
 
 Nota: se non passi --polygons-file lo script userà poligoni di esempio (approssimativi).
+
+Usare --notify-telegram per abilitare le notifiche Telegram, dopo aver modificato lo script inserendo ID del bot e della chat.
 """
 
 import argparse
@@ -256,8 +258,8 @@ def match_hex(hex_code: str, patterns: List[str]) -> bool:
 
 
 def send_telegram(text: str) -> None:
-    token = os.getenv("TELEGRAM BOT TOKEN")
-    chat_id = os.getenv("TELEGRAM CHAT ID")
+    token = os.getenv("TELEGRAM_BOT_TOKEN")
+    chat_id = os.getenv("TELEGRAM_CHAT_ID")
     if not token or not chat_id:
         print("[INFO] Telegram non configurato (manca TELEGRAM_BOT_TOKEN o TELEGRAM_CHAT_ID).")
         return

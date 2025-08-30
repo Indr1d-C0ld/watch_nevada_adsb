@@ -9,8 +9,8 @@ Restart=always
 RestartSec=5
 User=pi
 Environment=PYTHONUNBUFFERED=1
-Environment=TELEGRAM_BOT_TOKEN=8240540180:AAF782pbzC1kk8R17UfORGPTKkbz_unMYdA
-Environment=TELEGRAM_CHAT_ID=-1002970147601
+Environment=TELEGRAM_BOT_TOKEN=
+Environment=TELEGRAM_CHAT_ID=
 
 [Install]
 WantedBy=multi-user.target

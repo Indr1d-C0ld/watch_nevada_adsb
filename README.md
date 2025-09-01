@@ -18,13 +18,13 @@ Il programma è un sistema di monitoraggio aereo avanzato, progettato per osserv
 
 ### Utilizzo ###
 
-usare --polygons-file <file> per caricare poligoni di coordinate tramite JSON.
+Usare --polygons-file <file> per caricare poligoni di coordinate tramite JSON.
 
 Nota: se non passi --polygons-file lo script userà poligoni di esempio (approssimativi, sulla zona di default).
 
-usare --interval <secondi> per regolare la frequenza di controllo.
+Usare --interval <secondi> per regolare la frequenza di controllo.
 
-usare --notify-telegram per abilitare le notifiche Telegram, dopo aver modificato il file di servizio sistema inserendo ID del bot e della chat.
+Usare --notify-telegram per abilitare le notifiche Telegram, dopo aver modificato il file di servizio sistema inserendo ID del bot e della chat.
 
 ---
 

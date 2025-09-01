@@ -22,6 +22,8 @@ usare --polygons-file <file> per caricare poligoni di coordinate tramite JSON.
 
 Nota: se non passi --polygons-file lo script userà poligoni di esempio (approssimativi, sulla zona di default).
 
+usare --interval <secondi> per regolare la frequenza di controllo.
+
 usare --notify-telegram per abilitare le notifiche Telegram, dopo aver modificato il file di servizio sistema inserendo ID del bot e della chat.
 
 ---
@@ -49,5 +51,7 @@ The program is an advanced aircraft monitoring system, designed to monitor ADS-B
 Use --polygons-file <file> to load coordinate polygons via JSON.
 
 Note: If you don't specify --polygons-file, the script will use sample polygons (approximate, based on the default area).
+
+Use --interval <seconds> to adjust the check frequency.
 
 Use --notify-telegram to enable Telegram notifications, after editing the system service file by entering bot and chat IDs.

@@ -3,7 +3,8 @@ Description=Nevada NTTR ADS-B Monitoring
 After=network.target
 
 [Service]
-ExecStart=/usr/bin/python3 /home/pi/watch_nevada/watch_nevada_secret.py  --polygons-file polygons.json --notify-telegram
+ExecStartPre=/bin/sleep 0
+ExecStart=/usr/bin/python3 /home/pi/watch_nevada/watch_nevada_secret.py  --polygons-file polygons.json --notify-telegram --interval 600
 WorkingDirectory=/home/pi/watch_nevada/
 Restart=always
 RestartSec=5

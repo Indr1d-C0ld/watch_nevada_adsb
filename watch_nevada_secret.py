@@ -1,15 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-watch_nevada_secret.py — Monitor NTTR con poligoni precisi (point-in-polygon).
+watch_nevada_secret.py — Monitor aeree con poligoni precisi (point-in-polygon).
 Aggiunge:
  - supporto a poligoni (GeoJSON o JSON semplice)
  - algoritmo ray-casting (no dipendenze)
- - use --polygons-file <file> per caricare poligoni ufficiali
-
-Nota: se non passi --polygons-file lo script userà poligoni di esempio (approssimativi).
-
-Usare --notify-telegram per abilitare le notifiche Telegram, dopo aver modificato lo script inserendo ID del bot e della chat.
+ - gestione rate-limit globale tramite lockfile
+ - parsing sicuro dei tipi numerici (altitudine, velocità, coordinate)
 """
 
 import argparse
@@ -17,17 +14,17 @@ import csv
 import datetime as dt
 import fnmatch
 import json
-import math
 import os
 import sys
 import time
+import fcntl   # 🔹 gestione lockfile per rate limit
 from dataclasses import dataclass
-from typing import Dict, Iterable, List, Optional, Tuple, Union
+from typing import Dict, Iterable, List, Optional, Tuple
 
 import requests
 
 # ---------------------------
-# Tiles / API config (unchanged)
+# Tiles / API config
 # ---------------------------
 TILES = [
     (37.246, -115.800, 40),
@@ -38,9 +35,10 @@ TILES = [
     (36.300, -115.030, 30),
 ]
 
+
 API_TEMPLATE = "https://opendata.adsb.fi/api/v2/lat/{lat}/lon/{lon}/dist/{rng}"
 
-# thresholds (same as before, tweak as needed)
+# thresholds
 MAX_GS_KT = 650
 MIN_GS_KT = 35
 MIN_ALT_FT = 500
@@ -65,40 +63,57 @@ class Aircraft:
     gs: Optional[float]
     ts: Optional[int]
 
+# ---------------------------
+# Rate limiting con lockfile
+# ---------------------------
+def api_rate_guard():
+    """
+    Garantisce che solo una richiesta API al secondo venga fatta
+    da tutte le istanze in esecuzione.
+    Usa un lockfile in /tmp per coordinare i processi.
+    """
+    lockfile = "/tmp/adsbfi_api.lock"
+    with open(lockfile, "a+") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)   # lock esclusivo
+        f.seek(0)
+        try:
+            last = float(f.read().strip())
+        except Exception:
+            last = 0.0
+
+        now = time.time()
+        delta = now - last
+        if delta < 1.05:  # se <1s dall’ultima chiamata, aspetta
+            time.sleep(1.05 - delta)
+
+        # aggiorna il timestamp
+        f.seek(0)
+        f.truncate()
+        f.write(str(time.time()))
+        f.flush()
+        fcntl.flock(f, fcntl.LOCK_UN)
 
 # ---------------------------
 # Point-in-polygon (ray-casting)
 # ---------------------------
 def point_in_ring(point: Tuple[float, float], ring: List[Tuple[float, float]]) -> bool:
-    """
-    Ray casting algorithm for a single ring (list of (lat, lon) tuples).
-    Returns True if point is inside the ring.
-    Uses lat/lon as planar approximation (sufficient for our polygons).
-    """
-    x, y = point[1], point[0]  # operate in (lon, lat) -> (x, y)
+    x, y = point[1], point[0]  # (lon, lat) -> (x, y)
     inside = False
     n = len(ring)
     for i in range(n):
         yi, xi = ring[i][0], ring[i][1]
         yj, xj = ring[(i + 1) % n][0], ring[(i + 1) % n][1]
-        # convert to same coordinate order: ring stored as (lat, lon)
         if ((yi > y) != (yj > y)) and (x < (xj - xi) * (y - yi) / (yj - yi + 1e-12) + xi):
             inside = not inside
     return inside
 
 
 def point_in_polygon(point: Tuple[float, float], polygon: List[List[Tuple[float, float]]]) -> bool:
-    """
-    polygon: list of rings, first ring = exterior, subsequent rings = holes.
-    point: (lat, lon)
-    Returns True if inside exterior and not inside any hole.
-    """
     if not polygon:
         return False
     exterior = polygon[0]
     if not point_in_ring(point, exterior):
         return False
-    # if in exterior, ensure not in any hole
     for hole in polygon[1:]:
         if point_in_ring(point, hole):
             return False
@@ -115,27 +130,19 @@ def in_any_polygon(lat: Optional[float], lon: Optional[float], polygons: Iterabl
     return False
 
 # ---------------------------
-# Utility: load polygons (GeoJSON or simple JSON)
+# Utility: load polygons
 # ---------------------------
 def load_polygons_from_geojson(path: str) -> List[List[List[Tuple[float, float]]]]:
-    """
-    Accepts a GeoJSON FeatureCollection of Polygon / MultiPolygon or a simple JSON:
-      { "polygons": [ [ [ [lat,lon], ... ] , [hole...], ... ], ... ] }
-    Returns list of polygons; each polygon is list of rings; each ring is list of (lat, lon)
-    """
     with open(path, "r", encoding="utf-8") as f:
         data = json.load(f)
 
     polys = []
-
-    # GeoJSON detection
     if isinstance(data, dict) and data.get("type") == "FeatureCollection":
         for feat in data.get("features", []):
             geom = feat.get("geometry", {})
             gtype = geom.get("type")
             coords = geom.get("coordinates", [])
             if gtype == "Polygon":
-                # coords: [ [lon,lat], [lon,lat], ... ] rings
                 rings = []
                 for ring in coords:
                     rings.append([(float(pt[1]), float(pt[0])) for pt in ring])
@@ -146,7 +153,6 @@ def load_polygons_from_geojson(path: str) -> List[List[List[Tuple[float, float]]
                     for ring in polycoords:
                         rings.append([(float(pt[1]), float(pt[0])) for pt in ring])
                     polys.append(rings)
-    # fallback: "polygons" key with lat/lon arrays
     elif isinstance(data, dict) and "polygons" in data:
         for poly in data["polygons"]:
             rings = []
@@ -154,24 +160,15 @@ def load_polygons_from_geojson(path: str) -> List[List[List[Tuple[float, float]]
                 rings.append([(float(pt[0]), float(pt[1])) for pt in ring])
             polys.append(rings)
     else:
-        raise ValueError("Formato GeoJSON/JSON non riconosciuto. Fornisci FeatureCollection o {'polygons': ...}")
-
+        raise ValueError("Formato GeoJSON/JSON non riconosciuto")
     return polys
 
 
 def sample_approx_polygons() -> List[List[List[Tuple[float, float]]]]:
-    """
-    For testing: convert a few rectangular bounding boxes into polygons.
-    NON sono confini ufficiali R-4806/7/8/9/4810 — solo approssimazioni per test.
-    """
     boxes = [
-        # Groom/Area51 approx box
         (37.05, 37.55, -116.15, -115.30),
-        # Tonopah approx
         (37.55, 38.10, -117.20, -116.30),
-        # NTTR central approx
         (36.80, 38.30, -116.60, -115.00),
-        # low NTTR
         (36.50, 37.05, -116.40, -115.20),
     ]
     polys = []
@@ -183,13 +180,14 @@ def sample_approx_polygons() -> List[List[List[Tuple[float, float]]]]:
             (max_lat, min_lon),
             (min_lat, min_lon)
         ]
-        polys.append([ring])  # single-ring polygon
+        polys.append([ring])
     return polys
 
 # ---------------------------
-# Fetching / parsing aircraft (same code as before)
+# Fetching / parsing aircraft
 # ---------------------------
 def fetch_tile(lat: float, lon: float, rng_nm: int) -> List[dict]:
+    api_rate_guard()   # 🔹 qui la guardia globale
     url = API_TEMPLATE.format(lat=lat, lon=lon, rng=rng_nm)
     last_exc = None
     for attempt in range(1, HTTP_RETRIES + 2):
@@ -220,18 +218,30 @@ def fetch_all_tiles() -> List[dict]:
 
 
 def to_aircraft(ac: dict) -> Aircraft:
+    def safe_int(val):
+        try:
+            return int(val)
+        except (TypeError, ValueError):
+            return None
+
+    def safe_float(val):
+        try:
+            return float(val)
+        except (TypeError, ValueError):
+            return None
+
     return Aircraft(
         hex=(ac.get("hex") or "").lower(),
         flight=(ac.get("flight") or "").strip(),
-        lat=ac.get("lat"),
-        lon=ac.get("lon"),
-        alt_baro=ac.get("alt_baro"),
-        gs=ac.get("gs"),
+        lat=safe_float(ac.get("lat")),
+        lon=safe_float(ac.get("lon")),
+        alt_baro=safe_int(ac.get("alt_baro")),
+        gs=safe_float(ac.get("gs")),
         ts=ac.get("seen_pos_timestamp") or ac.get("seen_timestamp") or None,
     )
 
 # ---------------------------
-# hex filters, csv, telegram, anomalies (same as before)
+# hex filters, csv, telegram, anomalies
 # ---------------------------
 def load_hex_filters(path: Optional[str]) -> List[str]:
     if not path:
@@ -341,13 +351,13 @@ def detect_anomalies(ac: Aircraft, prev: Optional[Aircraft], dt_sec: Optional[fl
 # Main loop
 # ---------------------------
 def main():
-    ap = argparse.ArgumentParser(description="Monitor NTTR Nevada (adsb.fi Open Data) con poligoni")
+    ap = argparse.ArgumentParser(description="Monitor aereo (adsb.fi Open Data) con poligoni")
     ap.add_argument("--interval", type=int, default=60, help="Secondi tra i polling (default: 60)")
-    ap.add_argument("--csv", type=str, default="nttr_contacts.csv", help="CSV per nuovi contatti")
+    ap.add_argument("--csv", type=str, default="contacts.csv", help="CSV per nuovi contatti")
     ap.add_argument("--notify-telegram", action="store_true", help="Abilita notifiche Telegram")
     ap.add_argument("--hex-filter-file", type=str, default=None, help="File con pattern HEX (wildcard *)")
     ap.add_argument("--hex-filter-mode", type=str, choices=["include", "exclude"], default="include")
-    ap.add_argument("--polygons-file", type=str, default=None, help="GeoJSON/JSON file con poligoni (Polygon/MultiPolygon) per le restricted areas")
+    ap.add_argument("--polygons-file", type=str, default=None, help="GeoJSON/JSON file con poligoni (Polygon/MultiPolygon)")
     ap.add_argument("--print-all", action="store_true", help="Stampa tutti i contatti")
     args = ap.parse_args()
 
@@ -372,11 +382,10 @@ def main():
     seen_runtime: Dict[str, Aircraft] = {}
     last_poll_time = None
 
-    print(f"Monitor NTTR con poligoni — start {now_utc_str()}")
+    print(f"Monitor aereo con poligoni — start {now_utc_str()}")
     while True:
         t0 = time.time()
         raw = []
-        # fetch & merge tiles
         seen = set()
         for (lat, lon, rng) in TILES:
             acs = fetch_tile(lat, lon, rng)
@@ -387,10 +396,8 @@ def main():
                     raw.append(ac)
 
         aircraft = [to_aircraft(ac) for ac in raw]
-        # filtriamo tramite poligoni
         aircraft = [ac for ac in aircraft if in_any_polygon(ac.lat, ac.lon, polygons)]
 
-        # filtri hex opzionali
         if hex_patterns:
             if args.hex_filter_mode == "include":
                 aircraft = [ac for ac in aircraft if match_hex(ac.hex, hex_patterns)]
@@ -428,7 +435,7 @@ def main():
                 new_rows.append(row)
                 print("  [NEW] " + format_ac(ac) + anomalies_str)
                 if args.notify_telegram:
-                    msg = f"NUOVO CONTATTO NTTR\n{format_ac(ac)}"
+                    msg = f"NUOVO CONTATTO\n{format_ac(ac)}"
                     if anomalies:
                         msg += "\nAnomalie: " + "; ".join(anomalies)
                     send_telegram(msg)

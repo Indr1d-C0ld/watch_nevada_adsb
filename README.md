@@ -1,6 +1,7 @@
 ### Esempio di notifica Telegram: ###
 
 <img>https://ibb.co/wrNysr39</img>
+<img src="https://ibb.co/wrNysr39">
 
 ### Descrizione ###
 

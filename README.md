@@ -1,6 +1,5 @@
 ### Esempio di notifica Telegram: ###
 
-<img>https://ibb.co/wrNysr39</img>
 <img src="https://ibb.co/wrNysr39">
 
 ### Descrizione ###
@@ -40,6 +39,10 @@ Usare --hex-filter-mode ("include" o "exclude", default: "include").
 Usare --print-all per stampare tutti i contatti.
 
 ---
+
+### Telegram notification example: ###
+
+<img src="https://ibb.co/wrNysr39">
 
 ### Description ###
 

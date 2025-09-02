@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-watch_nevada_secret.py — Monitor aeree con poligoni precisi (point-in-polygon).
+watch_nevada_secret.py — Monitor aerei con poligoni precisi (point-in-polygon).
 Aggiunge:
  - supporto a poligoni (GeoJSON o JSON semplice)
  - algoritmo ray-casting (no dipendenze)
  - gestione rate-limit globale tramite lockfile
  - parsing sicuro dei tipi numerici (altitudine, velocità, coordinate)
+ - notifiche Telegram con link diretti (HEX / FLT / REG / POS)
 """
 
 import argparse
@@ -35,7 +36,6 @@ TILES = [
     (36.300, -115.030, 30),
 ]
 
-
 API_TEMPLATE = "https://opendata.adsb.fi/api/v2/lat/{lat}/lon/{lon}/dist/{rng}"
 
 # thresholds
@@ -61,7 +61,8 @@ class Aircraft:
     lon: Optional[float]
     alt_baro: Optional[int]
     gs: Optional[float]
-    ts: Optional[int]
+    ts: Optional[float]
+    reg: Optional[str] = None  # nuova proprietà REG
 
 # ---------------------------
 # Rate limiting con lockfile
@@ -107,7 +108,6 @@ def point_in_ring(point: Tuple[float, float], ring: List[Tuple[float, float]]) -
             inside = not inside
     return inside
 
-
 def point_in_polygon(point: Tuple[float, float], polygon: List[List[Tuple[float, float]]]) -> bool:
     if not polygon:
         return False
@@ -118,7 +118,6 @@ def point_in_polygon(point: Tuple[float, float], polygon: List[List[Tuple[float,
         if point_in_ring(point, hole):
             return False
     return True
-
 
 def in_any_polygon(lat: Optional[float], lon: Optional[float], polygons: Iterable[List[List[Tuple[float, float]]]]) -> bool:
     if lat is None or lon is None:
@@ -163,7 +162,6 @@ def load_polygons_from_geojson(path: str) -> List[List[List[Tuple[float, float]]
         raise ValueError("Formato GeoJSON/JSON non riconosciuto")
     return polys
 
-
 def sample_approx_polygons() -> List[List[List[Tuple[float, float]]]]:
     boxes = [
         (37.05, 37.55, -116.15, -115.30),
@@ -190,7 +188,8 @@ def fetch_tile(lat: float, lon: float, rng_nm: int) -> List[dict]:
     api_rate_guard()   # 🔹 qui la guardia globale
     url = API_TEMPLATE.format(lat=lat, lon=lon, rng=rng_nm)
     last_exc = None
-    for attempt in range(1, HTTP_RETRIES + 2):
+    # 1 tentativo iniziale + HTTP_RETRIES retry
+    for attempt in range(HTTP_RETRIES + 1):
         try:
             r = requests.get(url, timeout=HTTP_TIMEOUT)
             r.raise_for_status()
@@ -198,11 +197,10 @@ def fetch_tile(lat: float, lon: float, rng_nm: int) -> List[dict]:
             return j.get("aircraft", []) or []
         except Exception as e:
             last_exc = e
-            if attempt <= HTTP_RETRIES:
-                time.sleep(HTTP_BACKOFF * attempt)
+            if attempt < HTTP_RETRIES:
+                time.sleep(HTTP_BACKOFF * (attempt + 1))
     print(f"[WARN] Fetch fallito {url} — {last_exc}", file=sys.stderr)
     return []
-
 
 def fetch_all_tiles() -> List[dict]:
     seen = set()
@@ -215,7 +213,6 @@ def fetch_all_tiles() -> List[dict]:
                 seen.add(hx)
                 merged.append(ac)
     return merged
-
 
 def to_aircraft(ac: dict) -> Aircraft:
     def safe_int(val):
@@ -237,7 +234,8 @@ def to_aircraft(ac: dict) -> Aircraft:
         lon=safe_float(ac.get("lon")),
         alt_baro=safe_int(ac.get("alt_baro")),
         gs=safe_float(ac.get("gs")),
-        ts=ac.get("seen_pos_timestamp") or ac.get("seen_timestamp") or None,
+        ts=safe_float(ac.get("seen_pos_timestamp") or ac.get("seen_timestamp")),
+        reg=(ac.get("r") or ac.get("reg") or "").strip() or None,
     )
 
 # ---------------------------
@@ -258,14 +256,12 @@ def load_hex_filters(path: Optional[str]) -> List[str]:
             pats.append(s.lower())
     return pats
 
-
 def match_hex(hex_code: str, patterns: List[str]) -> bool:
     hx = hex_code.lower()
     for pat in patterns:
         if fnmatch.fnmatch(hx, pat):
             return True
     return False
-
 
 def send_telegram(text: str) -> None:
     token = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -274,14 +270,18 @@ def send_telegram(text: str) -> None:
         print("[INFO] Telegram non configurato (manca TELEGRAM_BOT_TOKEN o TELEGRAM_CHAT_ID).")
         return
     url = f"https://api.telegram.org/bot{token}/sendMessage"
-    payload = {"chat_id": chat_id, "text": text, "disable_web_page_preview": True}
+    payload = {
+        "chat_id": chat_id,
+        "text": text,
+        "disable_web_page_preview": False,
+        "parse_mode": "Markdown"
+    }
     try:
         r = requests.post(url, json=payload, timeout=10)
         if r.status_code != 200:
             print(f"[WARN] Telegram HTTP {r.status_code}: {r.text}", file=sys.stderr)
     except Exception as e:
         print(f"[WARN] Telegram errore: {e}", file=sys.stderr)
-
 
 def load_seen_csv(csv_path: str) -> Dict[str, dict]:
     seen: Dict[str, dict] = {}
@@ -298,10 +298,9 @@ def load_seen_csv(csv_path: str) -> Dict[str, dict]:
         print(f"[WARN] Lettura CSV fallita: {e}", file=sys.stderr)
     return seen
 
-
 def append_seen_csv(csv_path: str, rows: List[dict]) -> None:
     must_write_header = not os.path.isfile(csv_path)
-    fieldnames = ["first_seen_utc", "hex", "callsign", "lat", "lon", "alt_ft", "gs_kt", "note"]
+    fieldnames = ["first_seen_utc", "hex", "callsign", "reg", "lat", "lon", "alt_ft", "gs_kt", "note"]
     try:
         with open(csv_path, "a", newline="", encoding="utf-8") as f:
             wr = csv.DictWriter(f, fieldnames=fieldnames)
@@ -312,17 +311,53 @@ def append_seen_csv(csv_path: str, rows: List[dict]) -> None:
     except Exception as e:
         print(f"[WARN] Scrittura CSV fallita: {e}", file=sys.stderr)
 
-
 def now_utc_str() -> str:
     return dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
+# --------- Formattazioni output ---------
+def _fmt_latlon(lat: Optional[float], lon: Optional[float]) -> str:
+    if lat is None or lon is None:
+        return "NA,NA"
+    return f"{lat:.6f},{lon:.6f}"
 
-def format_ac(ac: Aircraft) -> str:
-    return (f"HEX:{ac.hex}  FLT:{ac.flight or '-'}  "
-            f"ALT:{(ac.alt_baro or 'NA')} ft  GS:{(ac.gs or 'NA')} kt  "
-            f"POS:{ac.lat if ac.lat is not None else 'NA'},{ac.lon if ac.lon is not None else 'NA'}")
+def format_ac_console(ac: Aircraft) -> str:
+    """Riga per stampa console (senza link), con # e spazi come richiesto."""
+    parts = []
+    parts.append(f"HEX: #{ac.hex}" if ac.hex else "HEX: -")
+    parts.append(f"FLT: #{ac.flight}" if ac.flight else "FLT: -")
+    if ac.reg:
+        parts.append(f"REG: #{ac.reg}")
+    parts.append(f"ALT: {ac.alt_baro if ac.alt_baro is not None else 'NA'} ft")
+    if ac.gs is not None:
+        parts.append(f"GS: {ac.gs:.1f} kt")
+    else:
+        parts.append("GS: NA kt")
+    parts.append(f"POS: {_fmt_latlon(ac.lat, ac.lon)}")
+    return "  ".join(parts)
 
+def format_ac_telegram(ac: Aircraft) -> str:
+    """Riga per Telegram (Markdown), con POS cliccabile su Google Maps."""
+    parts = []
+    parts.append(f"HEX: #{ac.hex}" if ac.hex else "HEX: -")
+    parts.append(f"FLT: #{ac.flight}" if ac.flight else "FLT: -")
+    if ac.reg:
+        parts.append(f"REG: #{ac.reg}")
+    parts.append(f"ALT: {ac.alt_baro if ac.alt_baro is not None else 'NA'} ft")
+    if ac.gs is not None:
+        parts.append(f"GS: {ac.gs:.1f} kt")
+    else:
+        parts.append("GS: NA kt")
 
+    if ac.lat is not None and ac.lon is not None:
+        latlon = _fmt_latlon(ac.lat, ac.lon)
+        map_url = f"https://maps.google.com/?q={ac.lat:.6f},{ac.lon:.6f}"
+        parts.append(f"POS: [{latlon}]({map_url})")
+    else:
+        parts.append("POS: NA,NA")
+
+    return "  ".join(parts)
+
+# --------- Rilevazione anomalie ---------
 def detect_anomalies(ac: Aircraft, prev: Optional[Aircraft], dt_sec: Optional[float]) -> List[str]:
     notes = []
     if ac.gs is not None:
@@ -385,19 +420,15 @@ def main():
     print(f"Monitor aereo con poligoni — start {now_utc_str()}")
     while True:
         t0 = time.time()
-        raw = []
-        seen = set()
-        for (lat, lon, rng) in TILES:
-            acs = fetch_tile(lat, lon, rng)
-            for ac in acs:
-                hx = (ac.get("hex") or "").lower()
-                if hx and hx not in seen:
-                    seen.add(hx)
-                    raw.append(ac)
+        raw = fetch_all_tiles()
 
+        # Parse
         aircraft = [to_aircraft(ac) for ac in raw]
+
+        # Poligoni
         aircraft = [ac for ac in aircraft if in_any_polygon(ac.lat, ac.lon, polygons)]
 
+        # Filtri HEX opzionali
         if hex_patterns:
             if args.hex_filter_mode == "include":
                 aircraft = [ac for ac in aircraft if match_hex(ac.hex, hex_patterns)]
@@ -419,13 +450,15 @@ def main():
             anomalies_str = (" | " + "; ".join(anomalies)) if anomalies else ""
 
             if args.print_all:
-                print("  " + format_ac(ac) + anomalies_str)
+                print("  " + format_ac_console(ac) + anomalies_str)
 
+            # Primo avvistamento (nuovo contatto)
             if hx not in seen_csv:
                 row = {
                     "first_seen_utc": now_str,
                     "hex": ac.hex,
                     "callsign": ac.flight or "",
+                    "reg": ac.reg or "",
                     "lat": ac.lat if ac.lat is not None else "",
                     "lon": ac.lon if ac.lon is not None else "",
                     "alt_ft": ac.alt_baro if ac.alt_baro is not None else "",
@@ -433,15 +466,42 @@ def main():
                     "note": "; ".join(anomalies) if anomalies else "",
                 }
                 new_rows.append(row)
-                print("  [NEW] " + format_ac(ac) + anomalies_str)
+
+                # ----------- Messaggio Telegram -----------
                 if args.notify_telegram:
-                    msg = f"NUOVO CONTATTO\n{format_ac(ac)}"
+                    base_line = format_ac_telegram(ac)
+                    msg = f"NUOVO CONTATTO\n{base_line}"
                     if anomalies:
                         msg += "\nAnomalie: " + "; ".join(anomalies)
+
+                    # Link dinamici + piattaforme linkate alla homepage
+                    links = []
+                    hex_code = ac.hex
+                    flight_code = ac.flight or ""
+                    reg_code = ac.reg or ""
+
+                    if hex_code:
+                        links.append(f"[ADSB.fi](https://globe.adsb.fi/): https://globe.adsb.fi/?icao={hex_code}")
+                        links.append(f"[ADSB Exchange](https://globe.adsbexchange.com/): https://globe.adsbexchange.com/?icao={hex_code}")
+                        links.append(f"[Planespotters](https://www.planespotters.net/): https://www.planespotters.net/hex/{hex_code}")
+                        # JetPhotos per HEX: rimosso come richiesto
+
+                    if flight_code:
+                        links.append(f"[FlightAware](https://www.flightaware.com/it-IT/): https://flightaware.com/live/flight/{flight_code}")
+
+                    if reg_code:
+                        links.append(f"[AirHistory](https://www.airhistory.net/): https://www.airhistory.net/marks-all/{reg_code}")
+                        links.append(f"[JetPhotos](https://www.jetphotos.com/): https://www.jetphotos.com/registration/{reg_code}")
+
+                    if links:
+                        msg += "\n\n" + "\n".join(links)
+
                     send_telegram(msg)
 
+            # Aggiorna runtime
             seen_runtime[hx] = ac
 
+        # Scrivi eventuali nuovi contatti su CSV
         if new_rows:
             append_seen_csv(args.csv, new_rows)
             for r in new_rows:

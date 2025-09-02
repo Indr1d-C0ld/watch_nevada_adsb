@@ -42,7 +42,7 @@ Usare --print-all per stampare tutti i contatti.
 
 ### Telegram notification example: ###
 
-<img src="https://ibb.co/wrNysr39">
+<img>https://ibb.co/wrNysr39</src>
 
 ### Description ###
 

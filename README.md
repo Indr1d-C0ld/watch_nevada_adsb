@@ -26,6 +26,14 @@ Usare --interval <secondi> per regolare la frequenza di controllo.
 
 Usare --notify-telegram per abilitare le notifiche Telegram, dopo aver modificato il file di servizio sistema inserendo ID del bot e della chat.
 
+Usare --csv (default: contacts.csv) CSV per nuovi contatti.
+
+Usare --hex-filter-file per indicare file filtro HEX (wildcard *).
+
+Usare --hex-filter-mode ("include" o "exclude", default: "include").
+
+Usare --print-all per stampare tutti i contatti.
+
 ---
 
 ### Description ###
@@ -54,4 +62,12 @@ Note: If you don't specify --polygons-file, the script will use sample polygons 
 
 Use --interval <seconds> to adjust the check frequency.
 
-Use --notify-telegram to enable Telegram notifications, after editing the system service file by entering bot and chat IDs.
+Use --notify-telegram to enable Telegram notifications, after editing the system service file with bot and chat IDs.
+
+Use --csv (default: contacts.csv) CSV for new contacts.
+
+Use --hex-filter-file to specify a HEX filter file (wildcard *).
+
+Use --hex-filter-mode ("include" or "exclude", default: "include").
+
+Use --print-all to print all contacts.

@@ -1,3 +1,7 @@
+### Esempio di notifica Telegram: ###
+
+![Alt text](https://ibb.co/wrNysr39)
+
 ### Descrizione ###
 
 Il programma è un sistema di monitoraggio aereo avanzato, progettato per osservare in tempo reale tramite sito adsb.fi il traffico ADS-B che transita nello spazio aereo del Nevada, con particolare attenzione alle aree interdette e militari classificate (NTTR – Nellis Test and Training Range, poligoni R-4806/7/8/9/4810). La zone di interesse può essere facilmente modificata e personalizzata tramite modifica del file JSON contenente il poligono delle coordinate, utilizzando ad esempio il sito https://geojson.io/ .

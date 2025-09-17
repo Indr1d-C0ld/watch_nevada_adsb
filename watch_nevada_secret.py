@@ -37,6 +37,7 @@ TILES = [
 ]
 
 API_TEMPLATE = "https://opendata.adsb.fi/api/v2/lat/{lat}/lon/{lon}/dist/{rng}"
+API_MIL = "https://opendata.adsb.fi/api/v2/mil"
 
 # thresholds
 MAX_GS_KT = 650
@@ -63,6 +64,9 @@ class Aircraft:
     gs: Optional[float]
     ts: Optional[float]
     reg: Optional[str] = None  # nuova proprietà REG
+    model_t: Optional[str] = None      # 🔹 sigla modello (abbreviata)
+    model_desc: Optional[str] = None   # 🔹 descrizione estesa
+    is_mil: bool = False   # 🔹 nuovo campo
 
 # ---------------------------
 # Rate limiting con lockfile
@@ -226,7 +230,6 @@ def to_aircraft(ac: dict) -> Aircraft:
             return float(val)
         except (TypeError, ValueError):
             return None
-
     return Aircraft(
         hex=(ac.get("hex") or "").lower(),
         flight=(ac.get("flight") or "").strip(),
@@ -236,7 +239,44 @@ def to_aircraft(ac: dict) -> Aircraft:
         gs=safe_float(ac.get("gs")),
         ts=safe_float(ac.get("seen_pos_timestamp") or ac.get("seen_timestamp")),
         reg=(ac.get("r") or ac.get("reg") or "").strip() or None,
+        model_t=(ac.get("t") or "").strip() or None,        # 🔹 sigla
+        model_desc=(ac.get("desc") or "").strip() or None ,  # 🔹 esteso
+        is_mil=bool(
+            ac.get("force_mil") or
+            ac.get("military") or
+            ac.get("isMil") or
+            ac.get("mil") or
+            ("military" in str(ac.get("dbFlags") or "").lower())
+        )
     )
+
+# ---------------------------
+# fetch military
+# ---------------------------
+def fetch_military() -> List[dict]:
+    api_rate_guard()
+    last_exc = None
+    for attempt in range(HTTP_RETRIES + 1):
+        try:
+            r = requests.get(API_MIL, timeout=HTTP_TIMEOUT)
+            r.raise_for_status()
+            raw = r.json() or {}
+            if isinstance(raw, dict) and "ac" in raw:
+                data = raw["ac"]
+            elif isinstance(raw, list):
+                data = raw
+            else:
+                return []
+            for ac in data:
+                if isinstance(ac, dict):
+                    ac["force_mil"] = True
+            return data
+        except Exception as e:
+            last_exc = e
+            if attempt < HTTP_RETRIES:
+                time.sleep(HTTP_BACKOFF * (attempt + 1))
+    print(f"[WARN] Fetch militare fallito {API_MIL} — {last_exc}", file=sys.stderr)
+    return []
 
 # ---------------------------
 # hex filters, csv, telegram, anomalies
@@ -300,7 +340,7 @@ def load_seen_csv(csv_path: str) -> Dict[str, dict]:
 
 def append_seen_csv(csv_path: str, rows: List[dict]) -> None:
     must_write_header = not os.path.isfile(csv_path)
-    fieldnames = ["first_seen_utc", "hex", "callsign", "reg", "lat", "lon", "alt_ft", "gs_kt", "note"]
+    fieldnames = ["first_seen_utc", "hex", "callsign", "reg", "model_t", "lat", "lon", "alt_ft", "gs_kt", "note"]
     try:
         with open(csv_path, "a", newline="", encoding="utf-8") as f:
             wr = csv.DictWriter(f, fieldnames=fieldnames)
@@ -342,6 +382,8 @@ def format_ac_telegram(ac: Aircraft) -> str:
     parts.append(f"FLT: #{ac.flight}" if ac.flight else "FLT: -")
     if ac.reg:
         parts.append(f"REG: #{ac.reg}")
+    if ac.model_desc:
+        parts.append(f"MODEL: {ac.model_desc}")
     parts.append(f"ALT: {ac.alt_baro if ac.alt_baro is not None else 'NA'} ft")
     if ac.gs is not None:
         parts.append(f"GS: {ac.gs:.1f} kt")
@@ -421,6 +463,7 @@ def main():
     while True:
         t0 = time.time()
         raw = fetch_all_tiles()
+        raw += fetch_military()  # 🔹 aggiunta
 
         # Parse
         aircraft = [to_aircraft(ac) for ac in raw]
@@ -459,6 +502,7 @@ def main():
                     "hex": ac.hex,
                     "callsign": ac.flight or "",
                     "reg": ac.reg or "",
+                    "model_t": ac.model_t or "",
                     "lat": ac.lat if ac.lat is not None else "",
                     "lon": ac.lon if ac.lon is not None else "",
                     "alt_ft": ac.alt_baro if ac.alt_baro is not None else "",
@@ -474,7 +518,7 @@ def main():
                     if anomalies:
                         msg += "\nAnomalie: " + "; ".join(anomalies)
 
-                    # Link dinamici + piattaforme linkate alla homepage
+                    # Link dinamici + piattaforme
                     links = []
                     hex_code = ac.hex
                     flight_code = ac.flight or ""
@@ -484,7 +528,6 @@ def main():
                         links.append(f"[ADSB.fi](https://globe.adsb.fi/): https://globe.adsb.fi/?icao={hex_code}")
                         links.append(f"[ADSB Exchange](https://globe.adsbexchange.com/): https://globe.adsbexchange.com/?icao={hex_code}")
                         links.append(f"[Planespotters](https://www.planespotters.net/): https://www.planespotters.net/hex/{hex_code}")
-                        # JetPhotos per HEX: rimosso come richiesto
 
                     if flight_code:
                         links.append(f"[FlightAware](https://www.flightaware.com/it-IT/): https://flightaware.com/live/flight/{flight_code}")
@@ -501,6 +544,27 @@ def main():
             # Aggiorna runtime
             seen_runtime[hx] = ac
 
+            # 🔹 Blocco per i voli militari
+            if ac.is_mil:
+                row = {
+                    "first_seen_utc": now_str,
+                    "hex": ac.hex,
+                    "callsign": ac.flight or "",
+                    "reg": ac.reg or "",
+                    "model_t": ac.model_t or "",
+                    "lat": ac.lat if ac.lat is not None else "",
+                    "lon": ac.lon if ac.lon is not None else "",
+                    "alt_ft": ac.alt_baro if ac.alt_baro is not None else "",
+                    "gs_kt": f"{ac.gs:.0f}" if ac.gs is not None else "",
+                    "note": "mil"
+                }
+                new_rows.append(row)
+                print("  [MIL] " + format_ac_console(ac))
+
+                if args.notify_telegram:
+                    msg = f"VOLO MILITARE\n{format_ac_telegram(ac)}\nFlag: military"
+                    send_telegram(msg)
+
         # Scrivi eventuali nuovi contatti su CSV
         if new_rows:
             append_seen_csv(args.csv, new_rows)
@@ -511,7 +575,6 @@ def main():
         elapsed = time.time() - t0
         to_sleep = max(1, args.interval - int(elapsed))
         time.sleep(to_sleep)
-
 
 if __name__ == "__main__":
     try:

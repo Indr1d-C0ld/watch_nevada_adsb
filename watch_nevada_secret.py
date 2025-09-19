@@ -483,6 +483,8 @@ def main():
         print(f"\n[{now_str}] Contatti nella zona (poligoni): {len(by_hex)}")
 
         new_rows = []
+        added_this_cycle = set()  # evita doppie aggiunte nello stesso ciclo
+
         for hx, ac in by_hex.items():
             prev_ac = seen_runtime.get(hx)
             dt_sec = None
@@ -496,7 +498,7 @@ def main():
                 print("  " + format_ac_console(ac) + anomalies_str)
 
             # Primo avvistamento (nuovo contatto)
-            if hx not in seen_csv:
+            if hx not in seen_csv and hx not in added_this_cycle:
                 row = {
                     "first_seen_utc": now_str,
                     "hex": ac.hex,
@@ -510,8 +512,9 @@ def main():
                     "note": "; ".join(anomalies) if anomalies else "",
                 }
                 new_rows.append(row)
+                added_this_cycle.add(hx)
 
-                # ----------- Messaggio Telegram -----------
+                # ----------- Messaggio Telegram per nuovo contatto -----------
                 if args.notify_telegram:
                     base_line = format_ac_telegram(ac)
                     msg = f"NUOVO CONTATTO\n{base_line}"
@@ -525,12 +528,12 @@ def main():
                     reg_code = ac.reg or ""
 
                     if hex_code:
-                        links.append(f"[ADSB.fi](https://globe.adsb.fi/): https://globe.adsb.fi/?icao={hex_code}")
-                        links.append(f"[ADSB Exchange](https://globe.adsbexchange.com/): https://globe.adsbexchange.com/?icao={hex_code}")
+                        links.append(f"[ADSB.fi](https://globe.adsb.fi/?icao={hex_code}): https://globe.adsb.fi/?icao={hex_code}")
+                        links.append(f"[ADSB Exchange](https://globe.adsbexchange.com/?icao={hex_code}): https://globe.adsbexchange.com/?icao={hex_code}")
                         links.append(f"[Planespotters](https://www.planespotters.net/): https://www.planespotters.net/hex/{hex_code}")
 
                     if flight_code:
-                        links.append(f"[FlightAware](https://www.flightaware.com/it-IT/): https://flightaware.com/live/flight/{flight_code}")
+                        links.append(f"[FlightAware](https://www.flightaware.com/): https://flightaware.com/live/flight/{flight_code}")
 
                     if reg_code:
                         links.append(f"[AirHistory](https://www.airhistory.net/): https://www.airhistory.net/marks-all/{reg_code}")
@@ -544,25 +547,58 @@ def main():
             # Aggiorna runtime
             seen_runtime[hx] = ac
 
-            # 🔹 Blocco per i voli militari
+            # 🔹 Blocco per i voli militari — invia NOTIFICA arricchita con link
             if ac.is_mil:
-                row = {
-                    "first_seen_utc": now_str,
-                    "hex": ac.hex,
-                    "callsign": ac.flight or "",
-                    "reg": ac.reg or "",
-                    "model_t": ac.model_t or "",
-                    "lat": ac.lat if ac.lat is not None else "",
-                    "lon": ac.lon if ac.lon is not None else "",
-                    "alt_ft": ac.alt_baro if ac.alt_baro is not None else "",
-                    "gs_kt": f"{ac.gs:.0f}" if ac.gs is not None else "",
-                    "note": "mil"
-                }
-                new_rows.append(row)
+                # print console
                 print("  [MIL] " + format_ac_console(ac))
 
+                # prepara riga CSV per MIL solo se non già aggiunta
+                if hx not in added_this_cycle:
+                    row = {
+                        "first_seen_utc": now_str,
+                        "hex": ac.hex,
+                        "callsign": ac.flight or "",
+                        "reg": ac.reg or "",
+                        "model_t": ac.model_t or "",
+                        "lat": ac.lat if ac.lat is not None else "",
+                        "lon": ac.lon if ac.lon is not None else "",
+                        "alt_ft": ac.alt_baro if ac.alt_baro is not None else "",
+                        "gs_kt": f"{ac.gs:.0f}" if ac.gs is not None else "",
+                        "note": "mil"
+                    }
+                    new_rows.append(row)
+                    added_this_cycle.add(hx)
+
+                # invia Telegram con link alle piattaforme — struttura simile all'esempio
                 if args.notify_telegram:
-                    msg = f"VOLO MILITARE\n{format_ac_telegram(ac)}\nFlag: military"
+                    base_line = format_ac_telegram(ac)
+                    msg = f"VOLO MILITARE\n{base_line}\nFlag: military"
+
+                    # Link dinamici (HEX / FLT / REG)
+                    links = []
+                    hex_code = ac.hex
+                    flight_code = ac.flight or ""
+                    reg_code = ac.reg or ""
+
+                    if hex_code:
+                        links.append(f"[ADSB.fi](https://globe.adsb.fi/?icao={hex_code}): https://globe.adsb.fi/?icao={hex_code}")
+                        links.append(f"[ADSB Exchange](https://globe.adsbexchange.com/?icao={hex_code}): https://globe.adsbexchange.com/?icao={hex_code}")
+                        links.append(f"[Planespotters](https://www.planespotters.net/hex/{hex_code}): https://www.planespotters.net/hex/{hex_code}")
+
+                    if flight_code:
+                        links.append(f"[FlightAware](https://www.flightaware.com/): https://flightaware.com/live/flight/{flight_code}")
+
+                    if reg_code:
+                        links.append(f"[AirHistory](https://www.airhistory.net/): https://www.airhistory.net/marks-all/{reg_code}")
+                        links.append(f"[JetPhotos](https://www.jetphotos.com/): https://www.jetphotos.com/registration/{reg_code}")
+
+                    # link alla posizione (Google Maps) già incluso in base_line; ripetiamo se vuoi anche come link diretto
+                    if ac.lat is not None and ac.lon is not None:
+                        links.append(f"[Google Maps]({f'https://maps.google.com/?q={ac.lat:.6f},{ac.lon:.6f}'}): https://maps.google.com/?q={ac.lat:.6f},{ac.lon:.6f}")
+
+                    if links:
+                        msg += "\n\n" + "\n".join(links)
+
                     send_telegram(msg)
 
         # Scrivi eventuali nuovi contatti su CSV
